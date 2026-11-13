@@ -1,0 +1,143 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Monitoring for the URL shortener (SNS alerts, alarms, dashboard)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  FunctionName:
+    Type: String
+  ApiId:
+    Type: String
+  TableName:
+    Type: String
+  AlertEmail:
+    Type: String
+    Description: Email address that receives alarm notifications
+
+Resources:
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "urlshort-${Environment}-alerts"
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  LambdaErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "urlshort-${Environment}-lambda-errors"
+      AlarmDescription: Lambda function reported errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref FunctionName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  ApiServerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "urlshort-${Environment}-api-5xx"
+      AlarmDescription: API returned 5xx responses
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref ApiId
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "urlshort-${Environment}-lambda-slow"
+      AlarmDescription: Lambda average duration above 3 seconds
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref FunctionName
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 3000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "urlshort-${Environment}"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric", "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Lambda invocations and errors",
+                "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum", "period": 300,
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${FunctionName}"],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${FunctionName}"]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Lambda duration (ms)",
+                "region": "${AWS::Region}", "view": "timeSeries", "stat": "Average", "period": 300,
+                "metrics": [
+                  ["AWS/Lambda", "Duration", "FunctionName", "${FunctionName}"]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "API requests and errors",
+                "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum", "period": 300,
+                "metrics": [
+                  ["AWS/ApiGateway", "Count", "ApiId", "${ApiId}"],
+                  ["AWS/ApiGateway", "4xx", "ApiId", "${ApiId}"],
+                  ["AWS/ApiGateway", "5xx", "ApiId", "${ApiId}"]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "DynamoDB consumed capacity",
+                "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum", "period": 300,
+                "metrics": [
+                  ["AWS/DynamoDB", "ConsumedReadCapacityUnits", "TableName", "${TableName}"],
+                  ["AWS/DynamoDB", "ConsumedWriteCapacityUnits", "TableName", "${TableName}"]
+                ]
+              }
+            }
+          ]
+        }
+
+Outputs:
+  AlertTopicArn:
+    Value: !Ref AlertTopic
+  DashboardName:
+    Value: !Ref Dashboard

@@ -1,0 +1,59 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Parent stack for the serverless URL shortener (nested stacks)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  AlertEmail:
+    Type: String
+  AllowedOrigin:
+    Type: String
+    Default: "*"
+
+Resources:
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: templates/storage.yaml
+      Parameters:
+        Environment: !Ref Environment
+
+  ApiStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: templates/api.yaml
+      Parameters:
+        Environment: !Ref Environment
+        TableName: !GetAtt StorageStack.Outputs.TableName
+        TableArn: !GetAtt StorageStack.Outputs.TableArn
+        AllowedOrigin: !Ref AllowedOrigin
+
+  FrontendStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: templates/frontend.yaml
+      Parameters:
+        Environment: !Ref Environment
+
+  MonitoringStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: templates/monitoring.yaml
+      Parameters:
+        Environment: !Ref Environment
+        FunctionName: !GetAtt ApiStack.Outputs.FunctionName
+        ApiId: !GetAtt ApiStack.Outputs.ApiId
+        TableName: !GetAtt StorageStack.Outputs.TableName
+        AlertEmail: !Ref AlertEmail
+
+Outputs:
+  ApiUrl:
+    Value: !GetAtt ApiStack.Outputs.ApiUrl
+  SiteUrl:
+    Value: !GetAtt FrontendStack.Outputs.SiteUrl
+  BucketName:
+    Value: !GetAtt FrontendStack.Outputs.BucketName
+  DistributionId:
+    Value: !GetAtt FrontendStack.Outputs.DistributionId

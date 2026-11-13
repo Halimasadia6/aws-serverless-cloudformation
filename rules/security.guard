@@ -1,0 +1,29 @@
+let ddb = Resources.*[ Type == 'AWS::DynamoDB::Table' ]
+rule dynamodb_secure when %ddb !empty {
+    %ddb.Properties.SSESpecification.SSEEnabled == true
+    %ddb.Properties.PointInTimeRecoverySpecification.PointInTimeRecoveryEnabled == true
+}
+
+let buckets = Resources.*[ Type == 'AWS::S3::Bucket' ]
+rule s3_private_and_encrypted when %buckets !empty {
+    %buckets.Properties.PublicAccessBlockConfiguration.BlockPublicAcls == true
+    %buckets.Properties.PublicAccessBlockConfiguration.BlockPublicPolicy == true
+    %buckets.Properties.PublicAccessBlockConfiguration.IgnorePublicAcls == true
+    %buckets.Properties.PublicAccessBlockConfiguration.RestrictPublicBuckets == true
+    %buckets.Properties.BucketEncryption exists
+}
+
+let functions = Resources.*[ Type == 'AWS::Lambda::Function' ]
+rule lambda_tracing_enabled when %functions !empty {
+    %functions.Properties.TracingConfig.Mode == 'Active'
+}
+
+let dists = Resources.*[ Type == 'AWS::CloudFront::Distribution' ]
+rule cloudfront_https_only when %dists !empty {
+    %dists.Properties.DistributionConfig.DefaultCacheBehavior.ViewerProtocolPolicy == 'redirect-to-https'
+}
+
+let logs = Resources.*[ Type == 'AWS::Logs::LogGroup' ]
+rule log_retention_set when %logs !empty {
+    %logs.Properties.RetentionInDays exists
+}

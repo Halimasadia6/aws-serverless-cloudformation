@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>URL Shortener</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0;
+           display: flex; justify-content: center; padding: 60px 16px; }
+    .card { background: #1e293b; padding: 32px; border-radius: 12px; width: 100%; max-width: 520px; }
+    h1 { margin-top: 0; }
+    input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #475569;
+            background: #0f172a; color: #e2e8f0; box-sizing: border-box; }
+    button { margin-top: 12px; padding: 12px 20px; border: 0; border-radius: 8px;
+             background: #38bdf8; color: #0f172a; font-weight: 600; cursor: pointer; }
+    #result { margin-top: 20px; word-break: break-all; }
+    a { color: #38bdf8; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>URL Shortener</h1>
+    <p>Serverless: CloudFront, API Gateway, Lambda and DynamoDB, deployed with CloudFormation.</p>
+    <input id="url" type="url" placeholder="https://example.com/very/long/link">
+    <button id="go">Shorten</button>
+    <div id="result"></div>
+  </div>
+  <script>
+    const API_URL = "__API_URL__";
+    document.getElementById("go").addEventListener("click", async () => {
+      const out = document.getElementById("result");
+      out.textContent = "Working...";
+      try {
+        const res = await fetch(API_URL + "/links", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: document.getElementById("url").value })
+        });
+        const data = await res.json();
+        if (!res.ok) { out.textContent = "Error: " + data.error; return; }
+        out.innerHTML = 'Short link: <a href="' + data.shortUrl + '" target="_blank">' + data.shortUrl + '</a>';
+      } catch (e) {
+        out.textContent = "Request failed: " + e.message;
+      }
+    });
+  </script>
+</body>
+</html>

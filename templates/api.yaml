@@ -1,0 +1,175 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: API layer for the serverless URL shortener (HTTP API + Lambda)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  TableName:
+    Type: String
+  TableArn:
+    Type: String
+  AllowedOrigin:
+    Type: String
+    Default: "*"
+    Description: Origin allowed to call the API (tighten to the CloudFront domain later)
+
+Resources:
+  FunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/urlshort-${Environment}-handler"
+      RetentionInDays: 14
+
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LinksTableAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                Resource: !Ref TableArn
+
+  Function:
+    Type: AWS::Lambda::Function
+    DependsOn: FunctionLogGroup
+    Properties:
+      FunctionName: !Sub "urlshort-${Environment}-handler"
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt FunctionRole.Arn
+      Timeout: 10
+      MemorySize: 128
+      TracingConfig:
+        Mode: Active
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref TableName
+      Code:
+        ZipFile: |
+          import json, os, secrets, string, time
+          import boto3
+
+          table = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
+          ALPHABET = string.ascii_letters + string.digits
+
+          def resp(status, body):
+              return {
+                  "statusCode": status,
+                  "headers": {"Content-Type": "application/json"},
+                  "body": json.dumps(body),
+              }
+
+          def handler(event, context):
+              route = event["routeKey"]
+
+              if route == "POST /links":
+                  try:
+                      body = json.loads(event.get("body") or "{}")
+                  except ValueError:
+                      return resp(400, {"error": "invalid JSON"})
+                  url = body.get("url", "")
+                  if not url.startswith(("http://", "https://")) or len(url) > 2048:
+                      return resp(400, {"error": "url must start with http:// or https://"})
+                  code = "".join(secrets.choice(ALPHABET) for _ in range(7))
+                  now = int(time.time())
+                  table.put_item(
+                      Item={"code": code, "url": url, "createdAt": now, "expiresAt": now + 30 * 86400},
+                      ConditionExpression="attribute_not_exists(code)",
+                  )
+                  domain = event["requestContext"]["domainName"]
+                  return resp(201, {"code": code, "shortUrl": f"https://{domain}/{code}"})
+
+              if route == "GET /{code}":
+                  code = event["pathParameters"]["code"]
+                  item = table.get_item(Key={"code": code}).get("Item")
+                  if not item:
+                      return resp(404, {"error": "not found"})
+                  return {"statusCode": 302, "headers": {"Location": item["url"]}, "body": ""}
+
+              return resp(404, {"error": "no such route"})
+      Tags:
+        - Key: Project
+          Value: urlshort
+        - Key: Environment
+          Value: !Ref Environment
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "urlshort-${Environment}-api"
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref AllowedOrigin
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - content-type
+        MaxAge: 3600
+
+  Integration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt Function.Arn
+      PayloadFormatVersion: "2.0"
+
+  CreateRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /links"
+      Target: !Sub "integrations/${Integration}"
+
+  RedirectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /{code}"
+      Target: !Sub "integrations/${Integration}"
+
+  Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: "$default"
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+
+  InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*"
+
+Outputs:
+  ApiUrl:
+    Description: Base URL of the API
+    Value: !GetAtt HttpApi.ApiEndpoint
+  FunctionName:
+    Value: !Ref Function
+  ApiId:
+    Value: !Ref HttpApi

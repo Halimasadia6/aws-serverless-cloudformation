@@ -1,0 +1,5 @@
+templates:
+  - parent.yaml
+  - templates/*.yaml
+ignore_checks:
+  - W3002
